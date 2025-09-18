@@ -14,9 +14,7 @@ pipeline {
 
         stage('Build Docker Image') {
             steps {
-                dir('dist') {
-                    sh 'docker build -t $DOCKER_IMAGE -f Dockerfile .'
-                }
+                sh 'docker build -t $DOCKER_IMAGE -f dist/Dockerfile dist'
             }
         }
 
