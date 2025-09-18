@@ -2,42 +2,58 @@ pipeline {
     agent any
 
     environment {
-        IMAGE_NAME = "hari2821/trend"
+        DOCKER_IMAGE = "hari2821/trend:latest"
+        K8S_NAMESPACE = "trend"
     }
 
     stages {
         stage('Clone Repo') {
             steps {
-                git 'https://github.com/hari2821/Trend.git'
+                git branch: 'main',
+                    url: 'https://github.com/hari2821/Trend.git'
             }
         }
 
         stage('Build Docker Image') {
             steps {
-                sh 'docker build -t $IMAGE_NAME:latest .'
+                script {
+                    sh 'docker build -t $DOCKER_IMAGE ./dist'
+                }
             }
         }
 
         stage('Push to DockerHub') {
             steps {
-                withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
-                    sh """
-                        echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
-                        docker push $IMAGE_NAME:latest
-                    """
+                script {
+                    withCredentials([usernamePassword(credentialsId: 'dockerhub-dev', usernameVariable: 'DOCKER_USERNAME', passwordVariable: 'DOCKER_PASSWORD')]) {
+                        sh '''
+                            echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
+                            docker push $DOCKER_IMAGE
+                        '''
+                    }
                 }
             }
         }
 
         stage('Deploy to Minikube') {
             steps {
-                sh '''
-                kubectl delete deployment trend-web -n trend --ignore-not-found
-                kubectl apply -f k8s/namespace.yaml
-                kubectl apply -f k8s/deployment.rendered.yaml
-                kubectl apply -f k8s/service.yaml
-                '''
+                script {
+                    sh '''
+                        kubectl apply -f k8s/namespace.yaml
+                        kubectl apply -f k8s/deployment.rendered.yaml
+                        kubectl apply -f k8s/service.yaml
+                    '''
+                }
             }
+        }
+    }
+
+    post {
+        failure {
+            echo "❌ Pipeline failed. Check the logs for more information."
+        }
+        success {
+            echo "✅ Pipeline completed successfully. Application deployed to Minikube."
         }
     }
 }
