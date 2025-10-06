@@ -1,0 +1,86 @@
+pipeline {
+  agent any
+
+  environment {
+    IMAGE_REPO   = "<DOCKERHUB_USER>/trend-app"
+    AWS_REGION   = "us-east-1"
+    CLUSTER_NAME = "trend-eks"
+  }
+
+  triggers {
+    githubPush()  // webhook builds on every push
+  }
+
+  options {
+    disableConcurrentBuilds()
+    buildDiscarder(logRotator(numToKeepStr: '20'))
+    skipDefaultCheckout(true)
+  }
+
+  stages {
+    stage('Checkout') {
+      steps {
+        git branch: 'main', url: 'https://github.com/<your-username>/Trend.git'
+      }
+    }
+
+    stage('Docker Build') {
+      steps {
+        sh '''
+          docker build -t $IMAGE_REPO:latest .
+          GIT_SHA=$(git rev-parse --short HEAD)
+          docker tag $IMAGE_REPO:latest $IMAGE_REPO:$GIT_SHA
+          echo $GIT_SHA > .gitsha
+        '''
+      }
+    }
+
+    stage('Docker Push') {
+      steps {
+        withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DH_USER', passwordVariable: 'DH_PASS')]) {
+          sh '''
+            echo "$DH_PASS" | docker login -u "$DH_USER" --password-stdin
+            GIT_SHA=$(cat .gitsha)
+            docker push $IMAGE_REPO:latest
+            docker push $IMAGE_REPO:$GIT_SHA
+            docker logout
+          '''
+        }
+      }
+    }
+
+    stage('Deploy to EKS') {
+      steps {
+        withCredentials([usernamePassword(credentialsId: 'aws-access', usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY')]) {
+          sh '''
+            export AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID
+            export AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY
+            export AWS_DEFAULT_REGION=$AWS_REGION
+
+            # ensure kubeconfig for this Jenkins host
+            aws eks update-kubeconfig --region $AWS_REGION --name $CLUSTER_NAME
+
+            # set image tag to the commit we built
+            GIT_SHA=$(cat .gitsha)
+            sed -i "s|<DOCKERHUB_USER>/trend-app:latest|$IMAGE_REPO:$GIT_SHA|g" k8s/deployment.yaml
+
+            # apply manifests
+            kubectl apply -f k8s/deployment.yaml
+            kubectl apply -f k8s/service.yaml
+
+            # wait for rollout
+            kubectl rollout status deploy/trend-app --timeout=120s || true
+          '''
+        }
+      }
+    }
+  }
+
+  post {
+    always {
+      sh 'docker image prune -f || true'
+      archiveArtifacts artifacts: '.gitsha', onlyIfSuccessful: false
+    }
+  }
+}
+
