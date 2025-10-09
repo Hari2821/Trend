@@ -1,86 +1,57 @@
 pipeline {
-  agent any
+    agent any
 
-  environment {
-    IMAGE_REPO   = "<DOCKERHUB_USER>/trend-app"
-    AWS_REGION   = "us-east-1"
-    CLUSTER_NAME = "trend-eks"
-  }
-
-  triggers {
-    githubPush()  // webhook builds on every push
-  }
-
-  options {
-    disableConcurrentBuilds()
-    buildDiscarder(logRotator(numToKeepStr: '20'))
-    skipDefaultCheckout(true)
-  }
-
-  stages {
-    stage('Checkout') {
-      steps {
-        git branch: 'main', url: 'https://github.com/<your-username>/Trend.git'
-      }
+    environment {
+        AWS_REGION = "us-east-1"
+        CLUSTER_NAME = "trend-cluster"
+        DOCKER_IMAGE = "hari2821/trend-app:latest"
+        DOCKERHUB_CREDENTIALS = credentials('dockerhub-creds')  // Jenkins credential ID
     }
 
-    stage('Docker Build') {
-      steps {
-        sh '''
-          docker build -t $IMAGE_REPO:latest .
-          GIT_SHA=$(git rev-parse --short HEAD)
-          docker tag $IMAGE_REPO:latest $IMAGE_REPO:$GIT_SHA
-          echo $GIT_SHA > .gitsha
-        '''
-      }
-    }
-
-    stage('Docker Push') {
-      steps {
-        withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DH_USER', passwordVariable: 'DH_PASS')]) {
-          sh '''
-            echo "$DH_PASS" | docker login -u "$DH_USER" --password-stdin
-            GIT_SHA=$(cat .gitsha)
-            docker push $IMAGE_REPO:latest
-            docker push $IMAGE_REPO:$GIT_SHA
-            docker logout
-          '''
+    stages {
+        stage('Checkout Code') {
+            steps {
+                // Since Jenkinsfile is in /dist, go one level up to get repo root if needed
+                dir("${WORKSPACE}") {
+                    echo "Cloning repository..."
+                    git branch: 'main', url: 'https://github.com/Vennilavan12/Trend.git'
+                }
+            }
         }
-      }
-    }
 
-    stage('Deploy to EKS') {
-      steps {
-        withCredentials([usernamePassword(credentialsId: 'aws-access', usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY')]) {
-          sh '''
-            export AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID
-            export AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY
-            export AWS_DEFAULT_REGION=$AWS_REGION
-
-            # ensure kubeconfig for this Jenkins host
-            aws eks update-kubeconfig --region $AWS_REGION --name $CLUSTER_NAME
-
-            # set image tag to the commit we built
-            GIT_SHA=$(cat .gitsha)
-            sed -i "s|<DOCKERHUB_USER>/trend-app:latest|$IMAGE_REPO:$GIT_SHA|g" k8s/deployment.yaml
-
-            # apply manifests
-            kubectl apply -f k8s/deployment.yaml
-            kubectl apply -f k8s/service.yaml
-
-            # wait for rollout
-            kubectl rollout status deploy/trend-app --timeout=120s || true
-          '''
+        stage('Build Docker Image') {
+            steps {
+                dir("${WORKSPACE}/dist") {
+                    echo "Building Docker image..."
+                    sh 'docker build -t hari2821/trend-app:latest .'
+                }
+            }
         }
-      }
-    }
-  }
 
-  post {
-    always {
-      sh 'docker image prune -f || true'
-      archiveArtifacts artifacts: '.gitsha', onlyIfSuccessful: false
-    }
-  }
-}
+        stage('Push to DockerHub') {
+            steps {
+                dir("${WORKSPACE}/dist") {
+                    echo "Pushing image to DockerHub..."
+                    sh '''
+                        echo $DOCKERHUB_CREDENTIALS_PSW | docker login -u $DOCKERHUB_CREDENTIALS_USR --password-stdin
+                        docker push hari2821/trend-app:latest
+                    '''
+                }
+            }
+        }
+
+        stage('Deploy to EKS') {
+            steps {
+                dir("${WORKSPACE}/dist/k8") {
+                    echo "Deploying to AWS EKS..."
+                    sh '''
+                        aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
+                        kubectl apply -f deployment.yaml
+                        kubectl apply -f service.yaml
+                        kubectl rollout status deployment/trend-deployment
+                        kubectl get svc trend-service
+                    '''
+                }
+            }
+        }
 
