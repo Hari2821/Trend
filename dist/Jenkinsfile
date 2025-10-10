@@ -2,56 +2,76 @@ pipeline {
     agent any
 
     environment {
-        AWS_REGION = "us-east-1"
-        CLUSTER_NAME = "trend-cluster"
         DOCKER_IMAGE = "hari2821/trend-app:latest"
-        DOCKERHUB_CREDENTIALS = credentials('dockerhub-creds')  // Jenkins credential ID
+        AWS_REGION   = "us-east-1"
+        CLUSTER_NAME = "trend-cluster"
     }
 
     stages {
-        stage('Checkout Code') {
-            steps {
-                // Since Jenkinsfile is in /dist, go one level up to get repo root if needed
-                dir("${WORKSPACE}") {
-                    echo "Cloning repository..."
-                    git branch: 'main', url: 'https://github.com/Vennilavan12/Trend.git'
-                }
-            }
-        }
 
         stage('Build Docker Image') {
             steps {
-                dir("${WORKSPACE}/dist") {
-                    echo "Building Docker image..."
-                    sh 'docker build -t hari2821/trend-app:latest .'
+                script {
+                    dir('dist') {
+                        sh '''
+                        echo "🚀 Building Docker image..."
+                        docker build -t trend-app .
+                        docker tag trend-app ${DOCKER_IMAGE}
+                        '''
+                    }
                 }
             }
         }
 
         stage('Push to DockerHub') {
             steps {
-                dir("${WORKSPACE}/dist") {
-                    echo "Pushing image to DockerHub..."
-                    sh '''
-                        echo $DOCKERHUB_CREDENTIALS_PSW | docker login -u $DOCKERHUB_CREDENTIALS_USR --password-stdin
-                        docker push hari2821/trend-app:latest
-                    '''
+                script {
+                    withCredentials([usernamePassword(credentialsId: 'dockerhub-credentials',
+                                                     usernameVariable: 'DOCKER_USER',
+                                                     passwordVariable: 'DOCKER_PASS')]) {
+                        sh '''
+                        echo "🔑 Logging into DockerHub..."
+                        echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
+                        docker push ${DOCKER_IMAGE}
+                        docker logout
+                        '''
+                    }
                 }
             }
         }
 
         stage('Deploy to EKS') {
             steps {
-                dir("${WORKSPACE}/dist/k8") {
-                    echo "Deploying to AWS EKS..."
+                script {
                     sh '''
-                        aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
-                        kubectl apply -f deployment.yaml
-                        kubectl apply -f service.yaml
-                        kubectl rollout status deployment/trend-deployment
-                        kubectl get svc trend-service
+                    echo "☁️  Updating kubeconfig for EKS..."
+                    aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
+
+                    echo "🚀 Deploying to Kubernetes..."
+                    kubectl apply -f dist/k8/deployment.yaml
+                    kubectl apply -f dist/k8/service.yaml
+
+                    echo "🔍 Checking rollout status..."
+                    kubectl rollout status deployment/trend-deployment --timeout=180s || true
+
+                    echo "📦 Current Pods:"
+                    kubectl get pods -o wide
+
+                    echo "🌐 Service Info:"
+                    kubectl get svc trend-service -o wide
                     '''
                 }
             }
         }
+    }
+
+    post {
+        success {
+            echo "✅ Deployment completed successfully!"
+        }
+        failure {
+            echo "❌ Pipeline failed. Check logs for details."
+        }
+    }
+}
 
