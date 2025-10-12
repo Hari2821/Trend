@@ -15,16 +15,7 @@ cd Trend
 React app runs on Port 3000. Exposed via Kubernetes LoadBalancer (Port 80).
 
 🐳 2. Dockerization
-FROM node:18-alpine
-RUN apk add --no-cache bash curl && npm install -g serve
-WORKDIR /app
-COPY . .
-EXPOSE 3000
-CMD ["serve", "-s", ".", "-l", "3000"]
-docker build -t trend-app .
-docker run -p 3000:3000 trend-app
-DockerHub Repo: hari2821/trend-app:latest
-
+Check the Dockerfile
 
 ☁️ 3. Terraform Infrastructure Setup
 Provisions: VPC, Subnets, Security Groups, IAM Roles, EC2 (Jenkins), EKS Cluster + Node Group
@@ -38,69 +29,14 @@ GitHub Webhook: http://:8080/github-webhook/
 docker login -u $DOCKER_USER --password-stdin
 
 💡 Jenkinsfile (/dist/Jenkinsfile)
-pipeline {
- agent any
- environment {
- DOCKER_USER = 'hari2821'
- IMAGE_NAME = 'trend-app'
- }
- stages {
- stage('Build Docker Image') {
- steps {
- dir('dist') {
- sh 'docker build -t ${IMAGE_NAME} .'
- }
- }
- }
- stage('Push to DockerHub') {
- steps {
- withCredentials([usernamePassword(...)]) {
- sh 'docker push ${DOCKER_USER}/${IMAGE_NAME}:latest'
- }
- }
- }
- stage('Deploy to EKS') {
- steps {
- sh 'kubectl apply -f dist/k8/*.yaml'
- }
- }
- }
-}
+check Jenkinsfile
 
 ☸️ 5. Kubernetes Configuration
 
 dist/k8/deployment.yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: trend-deployment
-spec:
-  replicas: 2
-  selector:
-    matchLabels:
-      app: trend
-  template:
-    metadata:
-      labels:
-        app: trend
-    spec:
-      containers:
-      - name: trend
-        image: hari2821/trend-app:latest
-        ports:
-        - containerPort: 3000
+Check the dist/k8/deployment.yaml file
 dist/k8/service.yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: trend-service
-spec:
-  type: LoadBalancer
-  selector:
-    app: trend
-  ports:
-    - port: 80
-      targetPort: 3000
+check the dist/k8/service.yaml file
 
 📊 6. Monitoring Setup
 Prometheus: http://:9090
