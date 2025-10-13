@@ -1,7 +1,8 @@
 🚀 Trend App – Full DevOps CI/CD Deployment on AWS
 Author: Hari
 GitHub Repo: https://github.com/Hari2821/Trend.git
-Deployed App: [Kubernetes LoadBalancer on Port 80](http://a6abb43a3ea0e47bab9ede041547c874-2091392275.us-east-1.elb.amazonaws.com/)
+Deployed App: [Kubernetes LoadBalancer on Port 80]
+(http://a6abb43a3ea0e47bab9ede041547c874-2091392275.us-east-1.elb.amazonaws.com/)
 
 🧩 Project Overview
 This project demonstrates a production-ready DevOps pipeline that automates the entire
