@@ -2,6 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: trend-deployment
+  namespace: trend           # <-- add
   labels:
     app: trend
 spec:
@@ -16,7 +17,7 @@ spec:
     spec:
       containers:
         - name: trend
-          image: docker.io/hari2821/trend-app:latest  # ✅ replace with your repo
+          image: docker.io/hari2821/trend-app:latest
           ports:
             - containerPort: 3000
           resources:

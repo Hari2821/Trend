@@ -1,77 +1,113 @@
 pipeline {
-    agent any
+  agent any
 
-    environment {
-        DOCKER_IMAGE = "hari2821/trend-app:latest"
-        AWS_REGION   = "us-east-1"
-        CLUSTER_NAME = "trend-cluster"
+  environment {
+    // Tag with commit SHA for traceable rollbacks
+    AWS_REGION   = 'us-east-1'
+    CLUSTER_NAME = 'trend-cluster2'                 // <-- your actual cluster
+    NAMESPACE    = 'trend'                          // <-- use 'default' if you prefer
+    DOCKER_REPO  = 'hari2821/trend-app'             // no tag here
+  }
+
+  options {
+    timestamps()
+    ansiColor('xterm')
+  }
+
+  triggers {
+    githubPush() // requires GitHub webhook
+  }
+
+  stages {
+    stage('Checkout') {
+      steps { checkout scm }
     }
 
-    stages {
-
-        stage('Build Docker Image') {
-            steps {
-                script {
-                    dir('dist') {
-                        sh '''
-                        echo "🚀 Building Docker image..."
-                        docker build -t trend-app .
-                        docker tag trend-app ${DOCKER_IMAGE}
-                        '''
-                    }
-                }
-            }
+    stage('Set Vars') {
+      steps {
+        script {
+          env.COMMIT = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
+          env.IMAGE  = "${DOCKER_REPO}:${COMMIT}"
+          echo "Building image: ${env.IMAGE}"
         }
-
-        stage('Push to DockerHub') {
-            steps {
-                script {
-                    withCredentials([usernamePassword(credentialsId: 'dockerhub-creds',
-                                                     usernameVariable: 'DOCKER_USER',
-                                                     passwordVariable: 'DOCKER_PASS')]) {
-                        sh '''
-                        echo "🔑 Logging into DockerHub..."
-                        echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
-                        docker push ${DOCKER_IMAGE}
-                        docker logout
-                        '''
-                    }
-                }
-            }
-        }
-
-        stage('Deploy to EKS') {
-            steps {
-                script {
-                    sh '''
-                    echo "☁️  Updating kubeconfig for EKS..."
-                    aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
-
-                    echo "🚀 Deploying to Kubernetes..."
-                    kubectl apply -f dist/k8/deployment.yaml
-                    kubectl apply -f dist/k8/service.yaml
-
-                    echo "🔍 Checking rollout status..."
-                    kubectl rollout status deployment/trend-deployment --timeout=180s || true
-
-                    echo "📦 Current Pods:"
-                    kubectl get pods -o wide
-
-                    echo "🌐 Service Info:"
-                    kubectl get svc trend-service -o wide
-                    '''
-                }
-            }
-        }
+      }
     }
 
-    post {
-        success {
-            echo "✅ Deployment completed successfully!"
+    stage('Build Docker Image') {
+      steps {
+        dir('dist') {
+          sh '''
+            echo "🚀 Building Docker image..."
+            docker build -t ${IMAGE} .
+          '''
         }
-        failure {
-            echo "❌ Pipeline failed. Check logs for details."
-        }
+      }
     }
+
+    stage('Push to DockerHub') {
+      steps {
+        withCredentials([usernamePassword(credentialsId: 'dockerhub-creds',
+                                          usernameVariable: 'DOCKER_USER',
+                                          passwordVariable: 'DOCKER_PASS')]) {
+          sh '''
+            echo "🔑 Logging into DockerHub..."
+            echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
+            docker push ${IMAGE}
+            # also keep a moving latest tag for manual tests
+            docker tag ${IMAGE} ${DOCKER_REPO}:latest
+            docker push ${DOCKER_REPO}:latest
+            docker logout
+          '''
+        }
+      }
+    }
+
+    stage('Kubeconfig') {
+      steps {
+        sh '''
+          echo "☁️  Updating kubeconfig for EKS..."
+          aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}
+          kubectl version --client
+        '''
+      }
+    }
+
+    stage('Deploy to EKS') {
+      steps {
+        sh '''
+          # Ensure namespace exists (safe if it already exists)
+          kubectl create namespace ${NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -
+
+          echo "🚀 Applying Service..."
+          kubectl -n ${NAMESPACE} apply -f dist/k8/service.yaml
+
+          echo "🚀 Applying Deployment with new image tag..."
+          sed -E "s#image: .*#image: ${IMAGE}#g" dist/k8/deployment.yaml | kubectl -n ${NAMESPACE} apply -f -
+
+          echo "🔍 Checking rollout status..."
+          kubectl -n ${NAMESPACE} rollout status deployment/trend-deployment --timeout=180s || true
+
+          echo "📦 Current Pods:"
+          kubectl -n ${NAMESPACE} get pods -o wide
+
+          echo "🌐 Service Info:"
+          kubectl -n ${NAMESPACE} get svc trend-service -o wide
+        '''
+      }
+    }
+  }
+
+  post {
+    success {
+      sh '''
+        LB=$(kubectl -n ${NAMESPACE} get svc trend-service -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+        echo "✅ Deployment completed. Public URL:"
+        echo "http://$LB/"
+      '''
+    }
+    failure {
+      echo "❌ Pipeline failed. Check logs for details."
+    }
+  }
 }
 
